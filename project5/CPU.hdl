@@ -1,0 +1,103 @@
+// This file is part of www.nand2tetris.org
+// and the book "The Elements of Computing Systems"
+// by Nisan and Schocken, MIT Press.
+// File name: projects/5/CPU.hdl
+/**
+ * The Hack Central Processing unit (CPU).
+ * Parses the binary code in the instruction input and executes it according to the
+ * Hack machine language specification. In the case of a C-instruction, computes the
+ * function specified by the instruction. If the instruction specifies to read a memory
+ * value, the inM input is expected to contain this value. If the instruction specifies
+ * to write a value to the memory, sets the outM output to this value, sets the addressM
+ * output to the target address, and asserts the writeM output (when writeM = 0, any
+ * value may appear in outM).
+ * If the reset input is 0, computes the address of the next instruction and sets the
+ * pc output to that value. If the reset input is 1, sets pc to 0.
+ * Note: The outM and writeM outputs are combinational: they are affected by the
+ * instruction's execution during the current cycle. The addressM and pc outputs are
+ * clocked: although they are affected by the instruction's execution, they commit to
+ * their new values only in the next cycle.
+ */
+CHIP CPU {
+
+    IN  inM[16],         // M value input  (M = contents of RAM[A])
+        instruction[16], // Instruction for execution
+        reset;           // Signals whether to re-start the current
+                         // program (reset==1) or continue executing
+                         // the current program (reset==0).
+
+    OUT outM[16],        // M value output
+        writeM,          // Write to M? 
+        addressM[15],    // Address in data memory (of M)
+        pc[15];          // address of next instruction
+
+    PARTS:
+    // |   15  |   14   |   13  |   12  |   11  |   10  |   9   |   8   |   7   |   6   |   5   |   4   |   3   |   2   |   1   |   0   |
+    // | A or C|  res   |  res  |   a   |   C0  |   C1  |   C2  |   C3  |   C4  |   C5  |  dest |  dest |  dest |  jump |  jump |  Jump | 
+
+    Not(in=instruction[15], out=opcode0);
+    
+    //A register
+    Mux16(a=instruction, b=inA, sel=instruction[15], out=inputA);
+    ARegister(in=inputA, load=writeA, out=outA, out[0..14]=addressM);
+
+    //D register
+    DRegister(in=inD, load=writeD, out=outD, out=input1);
+    
+    //Program Counter
+    PC(in=outA, load=J, inc=true, reset=reset, out[0..14]=pc);
+
+    //JUMP
+    DMux8Way(in=true, sel=instruction[0..2], a=nop0, b=JGT, c=JEQ, d=JGE, e=JLT, f=JNE, g=JLE, h=JMP);
+    
+    //Jump greater than 0
+    Or(a=zero, b=negative, out=zrOrNg);
+    Not(in=zrOrNg, out=positive);
+    And(a=positive, b=JGT, out=J0);
+
+    //Jump equal to 0
+    And(a=zero, b=JEQ, out=J1);
+
+    //Jump greater than or equal to 0
+    Not(in=negative, out=notng);
+    And(a=notng, b=JGE, out=J2);
+
+    //Jump less than 0
+    And(a=negative, b=JLT, out=J3);
+    
+    //Jump not equal to 0
+    Not(in=zero, out=notzr);
+    And(a=notzr, b=JNE, out=J4);
+    
+    //Jump less than or equal to 0
+    And(a=zrOrNg, b=JLE, out=J5);
+
+    //JUMP control bit
+    Or8Way(in[0]=J0, in[1]=J1, in[2]=J2, in[3]=J3, in[4]=J4, in[5]=J5, in[6]=JMP, in[7]=false, out=Jump);
+    And(a=Jump, b=instruction[15], out=J);
+    
+    //DESTINATION
+    DMux8Way(in=true, sel=instruction[3..5], a=nop2, b=M, c=D, d=MD, e=A, f=AM, g=AD, h=AMD);
+
+    //store in M register
+    Or8Way(in[0]=M, in[1]=MD, in[2]=AM, in[3]=AMD, in[4..7]=false, out=loadM0);
+    And(a=loadM0, b=instruction[15], out=writeM);
+
+    //store in D register
+    Or8Way(in[0]=D, in[1]=MD, in[2]=AD, in[3]=AMD, in[4..7]=false, out=writeD0);
+    And(a=writeD0, b=instruction[15], out=writeD);
+
+
+    //store in A register
+    Or8Way(in[0]=A, in[1]=AM, in[2]=AD, in[3]=AMD, in[4..7]=false, out=writeA0);
+    And(a=writeA0, b=instruction[15], out=writeA1);
+    Not(in=instruction[15], out=writeA2);
+    Xor(a=writeA1, b=writeA2, out=writeA);
+
+
+    //A or M input to ALU
+    Mux16(a=outA, b=inM, sel=instruction[12], out=input2);
+
+	ALU(x=input1, y=input2, zx=instruction[11], nx=instruction[10], zy=instruction[9], ny=instruction[8], f=instruction[7], no=instruction[6], out=inA, out=inD, out=outM, zr=zero, ng=negative);                   
+
+}
