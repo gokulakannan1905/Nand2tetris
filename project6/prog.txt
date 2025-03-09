@@ -1,0 +1,187 @@
+mod tbl;
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{BufRead, BufReader, Read, Write},
+};
+
+use tbl::{comp_tbl, dest_tbl, jump_tbl};
+
+fn main() {
+    //commandline input processing
+
+    let asm_file;
+    let cmdline_args = std::env::args().collect::<Vec<String>>();
+
+    if cmdline_args.len() < 2 {
+        eprintln!("Error: input file name is missing");
+        std::process::exit(1);
+    }
+    asm_file = &cmdline_args[1];
+
+    //check if the file exist
+    let file = File::open(asm_file);
+    if file.is_err() {
+        eprintln!("Error: no such file exist");
+        std::process::exit(1);
+    }
+
+    //create local variables
+    let mut symbol_tbl: HashMap<String, String> = HashMap::new(); //symbol table
+    symbol_tbl.insert("R0".into(), "0".into());
+    symbol_tbl.insert("R1".into(), "1".into());
+    symbol_tbl.insert("R2".into(), "2".into());
+    symbol_tbl.insert("R3".into(), "3".into());
+    symbol_tbl.insert("R4".into(), "4".into());
+    symbol_tbl.insert("R5".into(), "5".into());
+    symbol_tbl.insert("R6".into(), "6".into());
+    symbol_tbl.insert("R7".into(), "7".into());
+    symbol_tbl.insert("R8".into(), "8".into());
+    symbol_tbl.insert("R9".into(), "9".into());
+    symbol_tbl.insert("R10".into(), "10".into());
+    symbol_tbl.insert("R11".into(), "11".into());
+    symbol_tbl.insert("R12".into(), "12".into());
+    symbol_tbl.insert("R13".into(), "13".into());
+    symbol_tbl.insert("R14".into(), "14".into());
+    symbol_tbl.insert("R15".into(), "15".into());
+    symbol_tbl.insert("SCREEN".into(), "16384".into());
+    symbol_tbl.insert("KBD".into(), "24576".into());
+    symbol_tbl.insert("SP".into(), "0".into());
+    symbol_tbl.insert("LCL".into(), "1".into());
+    symbol_tbl.insert("ARG".into(), "2".into());
+    symbol_tbl.insert("THIS".into(), "3".into());
+    symbol_tbl.insert("THAT".into(), "4".into());
+
+    let mut line_number: u32 = 0; //ROM address
+    let mut n: u16 = 16; //Random RAM address
+
+    //import the lookup tables
+    let ctbl = comp_tbl();
+    let dtbl = dest_tbl();
+    let jtbl = jump_tbl();
+
+    //read the file
+    let mut buf_reader = BufReader::new(file.unwrap());
+    let mut contents = String::new();
+
+    buf_reader
+        .read_line(&mut contents)
+        .expect("Cannot read the file");
+    while !contents.is_empty() {
+        //parse the instruction
+        let line = contents.trim();
+        if !line.is_empty() {
+            //ignore whitespace
+            let words = line.split_whitespace().collect::<Vec<_>>();
+            let ins: Vec<char> = words[0].chars().collect();
+            match ins[0] {
+                'M' | 'A' | 'D' | '@' | '0' => line_number += 1,
+                '(' => {
+                    symbol_tbl.insert(
+                        words[0][1..words[0].len() - 1].to_owned(),
+                        format!("{}", line_number),
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        contents.clear();
+        buf_reader
+            .read_line(&mut contents)
+            .expect("Cannot read the file");
+    }
+    dbg!(&symbol_tbl);
+
+    let mut opcode: String;
+    let mut a_bit: String;
+    let mut dest: String;
+    let mut jmp: String;
+    let mut c: String;
+
+    let file = File::open(asm_file);
+    let mut buf_reader = BufReader::new(file.unwrap());
+    let mut contents = String::new();
+    buf_reader
+        .read_to_string(&mut contents)
+        .expect("read file failed");
+
+    let mut data_file = File::create("out.txt").expect("Cannot create file out.txt");
+
+    for line in contents.lines() {
+        if !line.trim().is_empty() {
+            let instruction = line.trim().split_whitespace().collect::<Vec<_>>()[0];
+            match instruction.chars().nth(0).unwrap() {
+                '@' => {
+                    // A instruction
+                    opcode = "0".into();
+
+                    let input = instruction.split('@').collect::<Vec<_>>()[1];
+                    let subcmd = input.parse::<u16>();
+                    let address;
+                    if subcmd.is_ok() {
+                        address = subcmd.unwrap();
+                    } else {
+                        if symbol_tbl.contains_key(input) {
+                            address = symbol_tbl
+                                .get(input)
+                                .unwrap()
+                                .parse::<u16>()
+                                .expect("parse error");
+                        } else {
+                            symbol_tbl.insert(input.to_string(), n.to_string());
+                            address = n;
+                            n += 1;
+                        }
+                    }
+                    data_file
+                        .write(format!("{opcode}{address:015b}\n").as_bytes())
+                        .expect("write failed");
+                }
+                'M' | 'A' | 'D' | '0' => {
+                    // C instruction
+                    opcode = "1".into();
+                    let subcmds;
+                    let computation;
+                    subcmds = instruction.split('=').collect::<Vec<_>>();
+                    if instruction.chars().nth(0).unwrap() != '0' && instruction.contains('=') {
+                        dest = dtbl
+                            .get(subcmds[0])
+                            .expect("key value pair missing")
+                            .to_string();
+                        computation = subcmds[1].split(';').collect::<Vec<_>>();
+                    } else {
+                        dest = dtbl
+                            .get("null")
+                            .expect("key value pair missing")
+                            .to_string();
+                        computation = subcmds[0].split(';').collect::<Vec<_>>();
+                    }
+                    if computation[0].contains('M') {
+                        a_bit = "1".into();
+                    } else {
+                        a_bit = "0".into();
+                    }
+                    c = ctbl
+                        .get(computation[0])
+                        .expect("key value pair not matched")
+                        .to_string();
+                    if computation.len() > 1 {
+                        jmp = jtbl
+                            .get(computation[1])
+                            .expect("key value pair not matched")
+                            .to_string();
+                    } else {
+                        jmp = jtbl.get("null").unwrap().to_string();
+                    }
+                    data_file
+                        .write(format!("{opcode}11{a_bit}{c}{dest}{jmp}\n").as_bytes())
+                        .expect("write failed");
+                }
+                _ => {
+                    // ignore comments
+                }
+            }
+        }
+    }
+}
